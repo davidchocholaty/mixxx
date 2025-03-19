@@ -1,6 +1,10 @@
 #include "effects/backends/builtin/pitchshifteffect.h"
 
+#if RUBBERBANDV4
+#include <rubberband/RubberBandLiveShifter.h>
+#else
 #include <rubberband/RubberBandStretcher.h>
+#endif
 
 #include <QString>
 
@@ -41,15 +45,26 @@ void PitchShiftGroupState::initializeBuffer(
 
 void PitchShiftGroupState::audioParametersChanged(
         const mixxx::EngineParameters& engineParameters) {
-    m_pRubberBand = std::make_unique<RubberBand::RubberBandStretcher>(
+    m_pRubberBand = std::make_unique<RubberBandType>(
             engineParameters.sampleRate(),
             engineParameters.channelCount(),
-            RubberBand::RubberBandStretcher::OptionProcessRealTime);
+#if RUBBERBANDV4
+            // RubberBand::RubberBandLiveShifter::OptionWindowMedium |
+            // RubberBand::RubberBandLiveShifter::OptionFormantShifted |
+            // RubberBand::RubberBandLiveShifter::OptionChannelsTogether
+            RubberBand::RubberBandLiveShifter::Options(0)
+    // RubberBand::RubberBandStretcher::OptionProcessRealTime
+#else
+            RubberBand::RubberBandStretcher::OptionProcessRealTime
+#endif
+    );
 
-    // Set the maximum number of frames that will be ever passing into a single
-    // RubberBand::RubberBandStretcher::process call.
+// Set the maximum number of frames that will be ever passing into a single
+// RubberBand::RubberBandStretcher::process call.
+#if !RUBBERBANDV4
     m_pRubberBand->setMaxProcessSize(engineParameters.framesPerBuffer());
     m_pRubberBand->setTimeRatio(1.0);
+#endif
 };
 
 // static
@@ -137,16 +152,17 @@ void PitchShiftEffect::processChannel(
 
     DEBUG_ASSERT(engineParameters.framesPerBuffer() <= pState->m_retrieveBuffer[0].size());
 
+    /*
     if (const bool formantPreserving = m_pFormantPreservingParameter->toBool();
             m_currentFormant != formantPreserving) {
         m_currentFormant = formantPreserving;
 
         pState->m_pRubberBand->setFormantOption(m_currentFormant
-                        ? RubberBand::RubberBandStretcher::
+                        ? RubberBandType::
                                   OptionFormantPreserved
-                        : RubberBand::RubberBandStretcher::
-                                  OptionFormantShifted);
-    }
+                        : RubberBandType::
+                                get  OptionFormantShifted);
+    }*/
 
     // The range of the scale of the Pitch parameter is <-1.0, 1.0>
     // with the middle position 0.0. On the other hand, the range
@@ -231,6 +247,49 @@ void PitchShiftEffect::processChannel(
 
     CSAMPLE* retrieveBuffers[2]{pState->m_retrieveBuffer[0].data(),
             pState->m_retrieveBuffer[1].data()};
+
+#if RUBBERBANDV4
+    SINT framesAvailable = pState->m_pRubberBand->getBlockSize();
+
+    // Assuming the size of each original buffer is at least 1024 (i.e., two
+    // channels with 512 samples each)
+    CSAMPLE* newRetrieveBuffers[2];
+
+    // Allocate new buffers with half the size (512 samples each)
+    newRetrieveBuffers[0] = new CSAMPLE[512];
+    newRetrieveBuffers[1] = new CSAMPLE[512];
+
+    // Copy the first 512 samples from the original buffers into the new ones
+    std::copy(retrieveBuffers[0], retrieveBuffers[0] + 512, newRetrieveBuffers[0]);
+    std::copy(retrieveBuffers[1], retrieveBuffers[1] + 512, newRetrieveBuffers[1]);
+
+    // Now you can use newRetrieveBuffers as needed
+    pState->m_pRubberBand->shift(newRetrieveBuffers, newRetrieveBuffers);
+
+    std::copy(newRetrieveBuffers[0], newRetrieveBuffers[0] + 512, retrieveBuffers[0]);
+    std::copy(newRetrieveBuffers[1], newRetrieveBuffers[1] + 512, retrieveBuffers[1]);
+
+    std::copy(retrieveBuffers[0] + 512, retrieveBuffers[0] + 1024, newRetrieveBuffers[0]);
+    std::copy(retrieveBuffers[1] + 512, retrieveBuffers[1] + 1024, newRetrieveBuffers[1]);
+
+    pState->m_pRubberBand->shift(newRetrieveBuffers, newRetrieveBuffers);
+
+    std::copy(newRetrieveBuffers[0], newRetrieveBuffers[0] + 512, retrieveBuffers[0] + 512);
+    std::copy(newRetrieveBuffers[1], newRetrieveBuffers[1] + 512, retrieveBuffers[1] + 512);
+
+    // qInfo() << "Frames available: " << framesAvailable << "\n";
+    // qInfo() << "Frames per buffer: " << engineParameters.framesPerBuffer() << "\n";
+    // qInfo() << "------------------\n";
+
+    // SINT receivedFrames = math_min(
+    // framesAvailable,
+    // engineParameters.framesPerBuffer());
+    SINT receivedFrames = engineParameters.framesPerBuffer();
+
+    // qInfo() << "Frames available: " << framesAvailable << "\n";
+    // qInfo() << "Frames per buffer: " << engineParameters.framesPerBuffer() << "\n";
+    // qInfo() << "------------------\n";
+#else
     pState->m_pRubberBand->process(
             retrieveBuffers,
             engineParameters.framesPerBuffer(),
@@ -244,6 +303,7 @@ void PitchShiftEffect::processChannel(
     SINT receivedFrames = pState->m_pRubberBand->retrieve(
             retrieveBuffers,
             framesToRead);
+#endif
 
     SampleUtil::interleaveBuffer(pOutput,
             pState->m_retrieveBuffer[0].data(),

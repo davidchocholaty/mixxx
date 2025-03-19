@@ -1,5 +1,7 @@
 #pragma once
 
+#include <rubberband/RubberBandStretcher.h>
+
 #include <QMap>
 
 #include "effects/backends/effectprocessor.h"
@@ -7,9 +9,26 @@
 #include "util/samplebuffer.h"
 #include "util/types.h"
 
+#ifdef RUBBERBAND_API_MAJOR_VERSION
+#define RUBBERBANDV4 (RUBBERBAND_API_MAJOR_VERSION >= 3)
+#else
+#define RUBBERBANDV4 0
+#endif
+
+#if RUBBERBANDV4
+#include <rubberband/RubberBandLiveShifter.h>
+#endif
+
 namespace RubberBand {
 class RubberBandStretcher;
 } // namespace RubberBand
+
+#if RUBBERBANDV4
+using RubberBandType = RubberBand::RubberBandLiveShifter;
+// using RubberBandType = RubberBand::RubberBandStretcher;
+#else
+using RubberBandType = RubberBand::RubberBandStretcher;
+#endif
 
 class PitchShiftGroupState : public EffectState {
   public:
@@ -19,7 +38,7 @@ class PitchShiftGroupState : public EffectState {
     void initializeBuffer(const mixxx::EngineParameters& engineParameters);
     void audioParametersChanged(const mixxx::EngineParameters& engineParameters);
 
-    std::unique_ptr<RubberBand::RubberBandStretcher> m_pRubberBand;
+    std::unique_ptr<RubberBandType> m_pRubberBand;
     mixxx::SampleBuffer m_retrieveBuffer[2];
 };
 
